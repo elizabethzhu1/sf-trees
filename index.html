@@ -413,13 +413,15 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
-    const CSV_PATH = "Street_Tree_List_20260521.csv";
+    const DATA_PATH = "trees-map.json";
+    const DETAILS_PATH = "tree-details.json";
     const SF_CENTER = [37.7599, -122.4396];
     const SF_BOUNDS = L.latLngBounds([37.604, -122.548], [37.833, -122.349]);
     const palette = [
       "#216b4f", "#c65135", "#2f6fb3", "#8d5a9e", "#d39b22",
       "#17898a", "#b44273", "#64733b", "#6b5b45", "#3d7dca"
     ];
+    const DEG_TO_RAD = Math.PI / 180;
     const statusColors = {
       "DPW Maintained": "#216b4f",
       "Permitted Site": "#2f6fb3",
@@ -433,10 +435,26 @@
     };
 
     const state = {
-      trees: [],
+      data: null,
+      details: null,
+      detailsPromise: null,
+      count: 0,
+      scale: 1000000,
+      dbhScale: 10,
       topSpecies: [],
       topCaretakers: [],
       topStatuses: [],
+      speciesNames: [],
+      statusNames: [],
+      caretakerNames: [],
+      speciesParts: [],
+      speciesSearch: [],
+      statusSearch: [],
+      caretakerSearch: [],
+      speciesColors: [],
+      caretakerColors: [],
+      statusColors: [],
+      colorCache: new Map(),
       search: "",
       colorMode: "status",
       sizeMode: "constant",
@@ -478,6 +496,11 @@
     }).addTo(map);
 
     class TreeCanvasLayer extends L.Layer {
+      constructor() {
+        super();
+        this.drawVersion = 0;
+      }
+
       onAdd(activeMap) {
         this.map = activeMap;
         this.canvas = L.DomUtil.create("canvas", "leaflet-tree-canvas");
@@ -508,6 +531,7 @@
         if (!this.canvas) return;
         const size = this.map.getSize();
         const topLeft = this.map.containerPointToLayerPoint([0, 0]);
+        this.topLeft = topLeft;
         const ratio = window.devicePixelRatio || 1;
         L.DomUtil.setPosition(this.canvas, topLeft);
         this.canvas.width = Math.max(1, Math.floor(size.x * ratio));
@@ -523,186 +547,170 @@
 
       draw() {
         if (!this.canvas) return;
+        this.drawVersion += 1;
+        const version = this.drawVersion;
         const ctx = this.canvas.getContext("2d");
         const ratio = window.devicePixelRatio || 1;
         const size = this.map.getSize();
         const bounds = this.map.getBounds().pad(0.02);
+        const south = bounds.getSouth();
+        const north = bounds.getNorth();
+        const west = bounds.getWest();
+        const east = bounds.getEast();
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.clearRect(0, 0, size.x, size.y);
 
-        let filtered = 0;
-        let visible = 0;
-        const zoom = this.map.getZoom();
-        const baseAlpha = zoom >= 15 ? 0.78 : zoom >= 13 ? 0.62 : 0.48;
-
-        for (const tree of state.trees) {
-          if (!passesFilters(tree)) continue;
-          filtered += 1;
-          if (!bounds.contains(tree.latLng)) continue;
-
-          const point = this.map.latLngToContainerPoint(tree.latLng);
-          const radius = getRadius(tree, zoom);
-          ctx.beginPath();
-          ctx.fillStyle = colorFor(tree, baseAlpha);
-          ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-          ctx.fill();
-          visible += 1;
+        if (!state.data) {
+          state.filteredCount = 0;
+          state.visibleCount = 0;
+          updateCounts();
+          return;
         }
 
-        state.filteredCount = filtered;
-        state.visibleCount = visible;
-        updateCounts();
+        const data = state.data;
+        let filtered = 0;
+        let visible = 0;
+        let i = 0;
+        const zoom = this.map.getZoom();
+        const worldScale = 256 * 2 ** zoom;
+        const pixelOrigin = this.map.getPixelOrigin();
+        const topLeft = this.topLeft || L.point(0, 0);
+        const baseAlpha = zoom >= 15 ? 0.78 : zoom >= 13 ? 0.62 : 0.48;
+        const colors = colorArrayForMode(state.colorMode, baseAlpha);
+        const chunkSize = zoom >= 15 ? 5500 : 8500;
+
+        const drawChunk = () => {
+          if (version !== this.drawVersion) return;
+          const end = Math.min(state.count, i + chunkSize);
+
+          for (; i < end; i += 1) {
+            if (!passesFilters(i)) continue;
+            filtered += 1;
+
+            const lat = data.lat[i] / state.scale;
+            const lng = data.lng[i] / state.scale;
+            if (lat < south || lat > north || lng < west || lng > east) continue;
+
+            const x = projectX(lng, worldScale, pixelOrigin, topLeft);
+            const y = projectY(lat, worldScale, pixelOrigin, topLeft);
+            ctx.beginPath();
+            ctx.fillStyle = colorForIndex(i, colors);
+            ctx.arc(x, y, radiusForIndex(i, zoom), 0, Math.PI * 2);
+            ctx.fill();
+            visible += 1;
+          }
+
+          state.filteredCount = filtered;
+          state.visibleCount = visible;
+          updateCounts();
+
+          if (i < state.count) {
+            window.requestAnimationFrame(drawChunk);
+          }
+        };
+
+        drawChunk();
       }
 
       handleClick(event) {
-        if (!state.trees.length) return;
+        if (!state.data) return;
         const bounds = this.map.getBounds().pad(0.02);
+        const south = bounds.getSouth();
+        const north = bounds.getNorth();
+        const west = bounds.getWest();
+        const east = bounds.getEast();
         const clickPoint = L.point(event.offsetX, event.offsetY);
-        let nearest = null;
+        let nearest = -1;
         let bestDistance = Infinity;
         const maxDistance = 10;
+        const data = state.data;
+        const zoom = this.map.getZoom();
+        const worldScale = 256 * 2 ** zoom;
+        const pixelOrigin = this.map.getPixelOrigin();
+        const topLeft = this.topLeft || L.point(0, 0);
 
-        for (const tree of state.trees) {
-          if (!passesFilters(tree) || !bounds.contains(tree.latLng)) continue;
-          const point = this.map.latLngToContainerPoint(tree.latLng);
-          const distance = point.distanceTo(clickPoint);
+        for (let i = 0; i < state.count; i += 1) {
+          const lat = data.lat[i] / state.scale;
+          const lng = data.lng[i] / state.scale;
+          if (
+            !passesFilters(i)
+            || lat < south
+            || lat > north
+            || lng < west
+            || lng > east
+          ) continue;
+          const x = projectX(lng, worldScale, pixelOrigin, topLeft);
+          const y = projectY(lat, worldScale, pixelOrigin, topLeft);
+          const distance = Math.hypot(x - clickPoint.x, y - clickPoint.y);
           if (distance < bestDistance) {
             bestDistance = distance;
-            nearest = tree;
+            nearest = i;
           }
         }
 
-        if (!nearest || bestDistance > maxDistance) return;
-        const content = `
-          <div class="tree-popup">
-            <strong>${escapeHTML(nearest.common || nearest.species || "Unknown tree")}</strong>
-            <span>${escapeHTML(nearest.scientific || "Unknown scientific name")}</span>
-            <div>${escapeHTML(nearest.address || "No address")}</div>
-            <div>Status: ${escapeHTML(nearest.status || "Unknown")}</div>
-            <div>Caretaker: ${escapeHTML(nearest.caretaker || "Unknown")}</div>
-            <div>DBH: ${nearest.dbh ? `${escapeHTML(String(nearest.dbh))} in` : "Unknown"}</div>
-          </div>
-        `;
+        if (nearest < 0 || bestDistance > maxDistance) return;
+        const lat = data.lat[nearest] / state.scale;
+        const lng = data.lng[nearest] / state.scale;
         popup = L.popup({ closeButton: true, autoPan: true })
-          .setLatLng(nearest.latLng)
-          .setContent(content)
+          .setLatLng([lat, lng])
+          .setContent(treePopupHTML(nearest))
           .openOn(this.map);
+        loadDetails().then(() => {
+          if (popup) popup.setContent(treePopupHTML(nearest));
+        });
       }
-    }
-
-    function parseCSVLine(line) {
-      const fields = [];
-      let current = "";
-      let quoted = false;
-
-      for (let i = 0; i < line.length; i += 1) {
-        const char = line[i];
-        const next = line[i + 1];
-        if (char === '"') {
-          if (quoted && next === '"') {
-            current += '"';
-            i += 1;
-          } else {
-            quoted = !quoted;
-          }
-        } else if (char === "," && !quoted) {
-          fields.push(current);
-          current = "";
-        } else {
-          current += char;
-        }
-      }
-
-      fields.push(current);
-      return fields;
     }
 
     async function loadTrees() {
       try {
-        const response = await fetch(CSV_PATH);
-        if (!response.ok) throw new Error(`Could not load ${CSV_PATH}`);
-        const csv = await response.text();
-        const lines = csv.split(/\r?\n/).filter(Boolean);
-        const headers = parseCSVLine(lines.shift());
-        const index = Object.fromEntries(headers.map((name, i) => [name, i]));
-        const trees = [];
-        const speciesCounts = new Map();
-        const statusCounts = new Map();
-        const caretakerCounts = new Map();
-
-        for (const line of lines) {
-          const row = parseCSVLine(line);
-          const lat = Number(row[index.Latitude]);
-          const lng = Number(row[index.Longitude]);
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-          if (!SF_BOUNDS.pad(0.08).contains([lat, lng])) continue;
-
-          const rawSpecies = clean(row[index.qSpecies]) || "Unknown";
-          const [scientific, common] = splitSpecies(rawSpecies);
-          const status = clean(row[index.qLegalStatus]) || "Unknown";
-          const caretaker = clean(row[index.qCaretaker]) || "Unknown";
-          const address = clean(row[index.qAddress]);
-          const dbh = parseDBH(row[index.DBH]);
-          const searchText = [
-            rawSpecies,
-            scientific,
-            common,
-            status,
-            caretaker,
-            address
-          ].join(" ").toLowerCase();
-
-          trees.push({
-            id: clean(row[index.TreeID]),
-            lat,
-            lng,
-            latLng: L.latLng(lat, lng),
-            species: rawSpecies,
-            scientific,
-            common,
-            status,
-            caretaker,
-            address,
-            dbh,
-            searchText
-          });
-          increment(speciesCounts, rawSpecies);
-          increment(statusCounts, status);
-          increment(caretakerCounts, caretaker);
-        }
-
-        state.trees = trees;
-        state.topSpecies = topEntries(speciesCounts, 10);
-        state.topStatuses = topEntries(statusCounts, 8);
-        state.topCaretakers = topEntries(caretakerCounts, 8);
-        els.status.textContent = `Loaded ${format.format(trees.length)} geocoded trees. Click a point for details.`;
-        els.totalCount.textContent = format.format(trees.length);
-        els.speciesCount.textContent = format.format(speciesCounts.size);
-        renderTopSpecies();
-        renderLegend();
-        layer.redraw();
+        const response = await fetch(DATA_PATH);
+        if (!response.ok) throw new Error(`Could not load ${DATA_PATH}`);
+        const payload = await response.json();
+        hydrateMapData(payload);
+        els.status.textContent = `Loaded ${format.format(state.count)} geocoded trees. Click a point for details.`;
+        finishLoad();
       } catch (error) {
         els.status.classList.add("error");
-        els.status.textContent = `Unable to load the CSV. Start a local web server in this folder, then open the page from that server. ${error.message}`;
+        els.status.textContent = `Unable to load ${DATA_PATH}. Run python3 build-data.py, then refresh. ${error.message}`;
       }
+    }
+
+    function hydrateMapData(payload) {
+      const speciesCounts = new Map(payload.topSpecies || []);
+      const statusCounts = new Map(payload.topStatuses || []);
+      const caretakerCounts = new Map(payload.topCaretakers || []);
+
+      state.data = payload;
+      state.count = payload.treeCount;
+      state.scale = payload.scale || 1000000;
+      state.dbhScale = payload.dbhScale || 10;
+      state.speciesNames = payload.species;
+      state.statusNames = payload.statuses;
+      state.caretakerNames = payload.caretakers;
+      state.speciesParts = payload.species.map(splitSpecies);
+      state.speciesSearch = payload.species.map(value => value.toLowerCase());
+      state.statusSearch = payload.statuses.map(value => value.toLowerCase());
+      state.caretakerSearch = payload.caretakers.map(value => value.toLowerCase());
+      state.topSpecies = topEntries(speciesCounts, 10);
+      state.topStatuses = topEntries(statusCounts, 8);
+      state.topCaretakers = topEntries(caretakerCounts, 8);
+      els.speciesCount.textContent = format.format(payload.species.length);
+    }
+
+    function finishLoad() {
+      state.statusColors = state.statusNames.map(status => statusColors[status] || statusColors.Other);
+      state.speciesColors = buildIndexedColors(state.speciesNames, state.topSpecies);
+      state.caretakerColors = buildIndexedColors(state.caretakerNames, state.topCaretakers);
+      state.colorCache.clear();
+      els.totalCount.textContent = format.format(state.count);
+      renderTopSpecies();
+      renderLegend();
+      layer.redraw();
     }
 
     function splitSpecies(value) {
       const parts = value.split("::").map(part => part.trim()).filter(Boolean);
       return [parts[0] || value, parts[1] || ""];
-    }
-
-    function clean(value) {
-      return (value || "").trim();
-    }
-
-    function parseDBH(value) {
-      const dbh = Number(value);
-      return Number.isFinite(dbh) && dbh >= 0 ? dbh : 0;
-    }
-
-    function increment(mapValue, key) {
-      mapValue.set(key, (mapValue.get(key) || 0) + 1);
     }
 
     function topEntries(mapValue, limit) {
@@ -712,34 +720,77 @@
         .map(([name, count], index) => ({ name, count, color: palette[index % palette.length] }));
     }
 
-    function passesFilters(tree) {
-      if (state.dbhMin > 0 && tree.dbh < state.dbhMin) return false;
-      if (state.search && !tree.searchText.includes(state.search)) return false;
+    function buildIndexedColors(names, items) {
+      const colorByName = new Map(items.map(({ name, color }) => [name, color]));
+      return names.map(name => colorByName.get(name) || "#7d8781");
+    }
+
+    function passesFilters(index) {
+      const data = state.data;
+      if (state.dbhMin > 0 && data.dbh[index] / state.dbhScale < state.dbhMin) return false;
+      if (state.search && !matchesSearch(index)) return false;
       return true;
     }
 
-    function colorFor(tree, alpha = 0.6) {
-      let hex = "#216b4f";
-      if (state.colorMode === "status") {
-        hex = statusColors[tree.status] || statusColors.Other;
-      } else if (state.colorMode === "caretaker") {
-        const entry = state.topCaretakers.find(item => item.name === tree.caretaker);
-        hex = entry ? entry.color : "#7d8781";
-      } else if (state.colorMode === "species") {
-        const entry = state.topSpecies.find(item => item.name === tree.species);
-        hex = entry ? entry.color : "#7d8781";
-      } else if (state.colorMode === "dbh") {
-        hex = dbhColor(tree.dbh);
-      }
-      return hexToRGBA(hex, alpha);
+    function matchesSearch(index) {
+      const data = state.data;
+      const query = state.search;
+      if (state.speciesSearch[data.sp[index]].includes(query)) return true;
+      if (state.statusSearch[data.st[index]].includes(query)) return true;
+      if (state.caretakerSearch[data.ca[index]].includes(query)) return true;
+      if (!state.details) return false;
+      return (state.details.addr[index] || "").toLowerCase().includes(query)
+        || (state.details.id[index] || "").includes(query);
     }
 
-    function dbhColor(dbh) {
-      if (dbh >= 36) return "#6b2e83";
-      if (dbh >= 24) return "#c65135";
-      if (dbh >= 12) return "#d39b22";
-      if (dbh >= 6) return "#2f6fb3";
-      return "#216b4f";
+    function colorArrayForMode(mode, alpha) {
+      const key = `${mode}:${alpha}`;
+      if (state.colorCache.has(key)) return state.colorCache.get(key);
+
+      let colors;
+      if (mode === "status") {
+        colors = state.statusColors.map(color => hexToRGBA(color, alpha));
+      } else if (mode === "caretaker") {
+        colors = state.caretakerColors.map(color => hexToRGBA(color, alpha));
+      } else if (mode === "species") {
+        colors = state.speciesColors.map(color => hexToRGBA(color, alpha));
+      } else {
+        colors = [
+          hexToRGBA("#216b4f", alpha),
+          hexToRGBA("#2f6fb3", alpha),
+          hexToRGBA("#d39b22", alpha),
+          hexToRGBA("#c65135", alpha),
+          hexToRGBA("#6b2e83", alpha)
+        ];
+      }
+
+      state.colorCache.set(key, colors);
+      return colors;
+    }
+
+    function colorForIndex(index, colors) {
+      const data = state.data;
+      if (state.colorMode === "status") return colors[data.st[index]];
+      if (state.colorMode === "caretaker") return colors[data.ca[index]];
+      if (state.colorMode === "species") return colors[data.sp[index]];
+      return colors[dbhBucket(data.dbh[index] / state.dbhScale)];
+    }
+
+    function dbhBucket(dbh) {
+      if (dbh >= 36) return 4;
+      if (dbh >= 24) return 3;
+      if (dbh >= 12) return 2;
+      if (dbh >= 6) return 1;
+      return 0;
+    }
+
+    function projectX(lng, worldScale, pixelOrigin, topLeft) {
+      return ((lng + 180) / 360 * worldScale) - pixelOrigin.x - topLeft.x;
+    }
+
+    function projectY(lat, worldScale, pixelOrigin, topLeft) {
+      const sin = Math.sin(lat * DEG_TO_RAD);
+      return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * worldScale - pixelOrigin.y - topLeft.y;
     }
 
     function hexToRGBA(hex, alpha) {
@@ -750,10 +801,55 @@
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
 
-    function getRadius(tree, zoom) {
+    function radiusForIndex(index, zoom) {
       const zoomBase = zoom >= 16 ? 3.9 : zoom >= 14 ? 2.7 : zoom >= 12 ? 1.8 : 1.15;
       if (state.sizeMode !== "dbh") return zoomBase;
-      return Math.min(7, zoomBase + Math.sqrt(Math.max(0, tree.dbh)) * 0.34);
+      return Math.min(7, zoomBase + Math.sqrt(Math.max(0, state.data.dbh[index] / state.dbhScale)) * 0.34);
+    }
+
+    function dbhLabel(index) {
+      const dbh = state.data.dbh[index] / state.dbhScale;
+      return dbh ? `${escapeHTML(String(dbh))} in` : "Unknown";
+    }
+
+    function treePopupHTML(index) {
+      const speciesIndex = state.data.sp[index];
+      const status = state.statusNames[state.data.st[index]] || "Unknown";
+      const caretaker = state.caretakerNames[state.data.ca[index]] || "Unknown";
+      const [scientific, common] = state.speciesParts[speciesIndex] || ["Unknown", ""];
+      const address = state.details ? state.details.addr[index] || "No address" : "Loading address...";
+
+      return `
+        <div class="tree-popup">
+          <strong>${escapeHTML(common || state.speciesNames[speciesIndex] || "Unknown tree")}</strong>
+          <span>${escapeHTML(scientific || "Unknown scientific name")}</span>
+          <div>${escapeHTML(address)}</div>
+          <div>Status: ${escapeHTML(status)}</div>
+          <div>Caretaker: ${escapeHTML(caretaker)}</div>
+          <div>DBH: ${dbhLabel(index)}</div>
+        </div>
+      `;
+    }
+
+    async function loadDetails() {
+      if (state.details) return state.details;
+      if (!state.detailsPromise) {
+        state.detailsPromise = fetch(DETAILS_PATH)
+          .then(response => {
+            if (!response.ok) throw new Error(`Could not load ${DETAILS_PATH}`);
+            return response.json();
+          })
+          .then(payload => {
+            state.details = payload;
+            return payload;
+          })
+          .catch(error => {
+            console.warn("Tree details could not be loaded.", error);
+            state.detailsPromise = null;
+            return null;
+          });
+      }
+      return state.detailsPromise;
     }
 
     function renderLegend() {
@@ -831,6 +927,9 @@
 
     els.search.addEventListener("input", () => {
       state.search = els.search.value.trim().toLowerCase();
+      if (state.search.length >= 3 && !state.details) {
+        loadDetails().then(() => layer.redraw());
+      }
       redrawDebounced();
     });
 
