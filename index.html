@@ -332,7 +332,7 @@
     <aside class="sidebar">
       <div class="titlebar">
         <h1>San Francisco Street Trees</h1>
-        <p class="subtitle">Street Tree List snapshot from May 21, 2026. Points are drawn on canvas so every geocoded tree can stay on the map.</p>
+        <p class="subtitle">Street Tree List snapshot from May 21, 2026. Select a neighborhood first; tree points load only for that area.</p>
       </div>
 
       <section class="stats" aria-label="Tree counts">
@@ -400,21 +400,22 @@
       </section>
 
       <section>
-        <label>Most Common Species</label>
+        <label id="top-list-label">Neighborhoods</label>
         <div class="top-list" id="top-species"></div>
       </section>
     </aside>
 
     <section class="map-wrap">
       <div id="map" aria-label="Map of San Francisco street trees"></div>
-      <div class="status" id="status">Loading tree data...</div>
+      <div class="status" id="status">Loading neighborhood map...</div>
     </section>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
-    const DATA_PATH = "trees-map.json";
-    const DETAILS_PATH = "tree-details.json";
+    const NEIGHBORHOODS_PATH = "neighborhoods-map.geojson";
+    const SUMMARY_PATH = "neighborhood-summary.json";
+    const TREE_DATA_DIR = "tree-data";
     const SF_CENTER = [37.7599, -122.4396];
     const SF_BOUNDS = L.latLngBounds([37.604, -122.548], [37.833, -122.349]);
     const palette = [
@@ -438,6 +439,10 @@
       data: null,
       details: null,
       detailsPromise: null,
+      summary: null,
+      neighborhoodFeatures: [],
+      selectedNeighborhood: null,
+      loadToken: 0,
       count: 0,
       scale: 1000000,
       dbhScale: 10,
@@ -477,11 +482,13 @@
       clearFilters: document.querySelector("#clear-filters"),
       legend: document.querySelector("#legend"),
       topSpecies: document.querySelector("#top-species"),
+      topListLabel: document.querySelector("#top-list-label"),
       status: document.querySelector("#status")
     };
 
     const format = new Intl.NumberFormat("en-US");
     let layer;
+    let neighborhoodLayer;
     let popup = null;
 
     const map = L.map("map", {
@@ -490,10 +497,23 @@
       maxBounds: SF_BOUNDS.pad(0.25)
     }).setView(SF_CENTER, 12);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const baseTileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+    });
+
+    function ensureInteractiveMap() {
+      if (!map.hasLayer(baseTileLayer)) {
+        baseTileLayer.addTo(map);
+      }
+      if (!layer) {
+        layer = new TreeCanvasLayer().addTo(map);
+      }
+    }
+
+    function redrawTrees() {
+      if (layer) layer.redraw();
+    }
 
     class TreeCanvasLayer extends L.Layer {
       constructor() {
@@ -505,7 +525,8 @@
         this.map = activeMap;
         this.canvas = L.DomUtil.create("canvas", "leaflet-tree-canvas");
         this.canvas.style.position = "absolute";
-        this.canvas.style.pointerEvents = "auto";
+        this.canvas.style.zIndex = "500";
+        this.canvas.style.pointerEvents = "none";
         this.canvas.style.cursor = "crosshair";
         activeMap.getPanes().overlayPane.appendChild(this.canvas);
         activeMap.on("moveend zoomend resize", this.reset, this);
@@ -547,6 +568,7 @@
 
       draw() {
         if (!this.canvas) return;
+        this.canvas.style.pointerEvents = state.data ? "auto" : "none";
         this.drawVersion += 1;
         const version = this.drawVersion;
         const ctx = this.canvas.getContext("2d");
@@ -613,7 +635,10 @@
       }
 
       handleClick(event) {
-        if (!state.data) return;
+        if (!state.data) {
+          selectNeighborhoodAtEvent(event);
+          return;
+        }
         const bounds = this.map.getBounds().pad(0.02);
         const south = bounds.getSouth();
         const north = bounds.getNorth();
@@ -648,30 +673,92 @@
           }
         }
 
-        if (nearest < 0 || bestDistance > maxDistance) return;
+        if (nearest < 0 || bestDistance > maxDistance) {
+          selectNeighborhoodAtEvent(event);
+          return;
+        }
         const lat = data.lat[nearest] / state.scale;
         const lng = data.lng[nearest] / state.scale;
         popup = L.popup({ closeButton: true, autoPan: true })
           .setLatLng([lat, lng])
           .setContent(treePopupHTML(nearest))
           .openOn(this.map);
-        loadDetails().then(() => {
-          if (popup) popup.setContent(treePopupHTML(nearest));
-        });
       }
     }
 
-    async function loadTrees() {
+    async function loadNeighborhoods() {
       try {
-        const response = await fetch(DATA_PATH);
-        if (!response.ok) throw new Error(`Could not load ${DATA_PATH}`);
-        const payload = await response.json();
-        hydrateMapData(payload);
-        els.status.textContent = `Loaded ${format.format(state.count)} geocoded trees. Click a point for details.`;
-        finishLoad();
+        const [neighborhoodResponse, summaryResponse] = await Promise.all([
+          fetch(NEIGHBORHOODS_PATH),
+          fetch(SUMMARY_PATH)
+        ]);
+        if (!neighborhoodResponse.ok) throw new Error(`Could not load ${NEIGHBORHOODS_PATH}`);
+        if (!summaryResponse.ok) throw new Error(`Could not load ${SUMMARY_PATH}`);
+
+        const neighborhoods = await neighborhoodResponse.json();
+        const summary = await summaryResponse.json();
+        state.summary = summary;
+        state.neighborhoodFeatures = neighborhoods.features || [];
+
+        neighborhoodLayer = L.geoJSON(neighborhoods, {
+          style: neighborhoodStyle,
+          onEachFeature: bindNeighborhood
+        }).addTo(map);
+
+        els.totalCount.textContent = format.format(summary.assignedTreeCount || summary.treeCount || 0);
+        els.filteredCount.textContent = "0";
+        els.visibleCount.textContent = "0";
+        els.speciesCount.textContent = format.format(summary.speciesCount || 0);
+        els.status.textContent = `Loaded ${format.format(summary.neighborhoodCount || 0)} neighborhoods. Click a neighborhood to load its trees.`;
+        renderNeighborhoodLegend();
+        renderNeighborhoodList();
+        map.fitBounds(neighborhoodLayer.getBounds(), { padding: [14, 14] });
       } catch (error) {
         els.status.classList.add("error");
-        els.status.textContent = `Unable to load ${DATA_PATH}. Run python3 build-data.py, then refresh. ${error.message}`;
+        els.status.textContent = `Unable to load neighborhood map. Run python3 build-data.py, then refresh. ${error.message}`;
+      }
+    }
+
+    async function selectNeighborhood(properties) {
+      if (!properties || !properties.slug) return;
+      const token = state.loadToken + 1;
+      state.loadToken = token;
+      state.selectedNeighborhood = properties;
+      state.data = null;
+      state.details = null;
+      state.detailsPromise = null;
+      state.count = 0;
+      state.filteredCount = 0;
+      state.visibleCount = 0;
+      updateCounts();
+      renderSelectedNeighborhood();
+      updateNeighborhoodStyles();
+      if (popup) {
+        popup.remove();
+        popup = null;
+      }
+
+      els.status.classList.remove("error");
+      els.status.textContent = `Loading ${properties.name} trees...`;
+      ensureInteractiveMap();
+      redrawTrees();
+
+      try {
+        const path = `${TREE_DATA_DIR}/${properties.slug}.json`;
+        const response = await fetch(path);
+        if (!response.ok) throw new Error(`Could not load ${path}`);
+        const payload = await response.json();
+        if (token !== state.loadToken) return;
+
+        hydrateMapData(payload);
+        finishLoad();
+        els.status.textContent = `${properties.name}: ${format.format(state.count)} trees loaded. Click a point for details.`;
+        const bounds = boundsForNeighborhood(properties.slug);
+        if (bounds) map.fitBounds(bounds, { padding: [26, 26] });
+      } catch (error) {
+        if (token !== state.loadToken) return;
+        els.status.classList.add("error");
+        els.status.textContent = `Unable to load ${properties.name} trees. Run python3 build-data.py, then refresh. ${error.message}`;
       }
     }
 
@@ -681,20 +768,21 @@
       const caretakerCounts = new Map(payload.topCaretakers || []);
 
       state.data = payload;
+      state.details = { addr: payload.addr || [], id: payload.id || [] };
       state.count = payload.treeCount;
       state.scale = payload.scale || 1000000;
       state.dbhScale = payload.dbhScale || 10;
-      state.speciesNames = payload.species;
-      state.statusNames = payload.statuses;
-      state.caretakerNames = payload.caretakers;
-      state.speciesParts = payload.species.map(splitSpecies);
-      state.speciesSearch = payload.species.map(value => value.toLowerCase());
-      state.statusSearch = payload.statuses.map(value => value.toLowerCase());
-      state.caretakerSearch = payload.caretakers.map(value => value.toLowerCase());
+      state.speciesNames = payload.species || [];
+      state.statusNames = payload.statuses || [];
+      state.caretakerNames = payload.caretakers || [];
+      state.speciesParts = state.speciesNames.map(splitSpecies);
+      state.speciesSearch = state.speciesNames.map(value => value.toLowerCase());
+      state.statusSearch = state.statusNames.map(value => value.toLowerCase());
+      state.caretakerSearch = state.caretakerNames.map(value => value.toLowerCase());
       state.topSpecies = topEntries(speciesCounts, 10);
       state.topStatuses = topEntries(statusCounts, 8);
       state.topCaretakers = topEntries(caretakerCounts, 8);
-      els.speciesCount.textContent = format.format(payload.species.length);
+      els.speciesCount.textContent = format.format(state.speciesNames.length);
     }
 
     function finishLoad() {
@@ -703,9 +791,150 @@
       state.caretakerColors = buildIndexedColors(state.caretakerNames, state.topCaretakers);
       state.colorCache.clear();
       els.totalCount.textContent = format.format(state.count);
+      els.topListLabel.textContent = "Most Common Species";
       renderTopSpecies();
       renderLegend();
-      layer.redraw();
+      redrawTrees();
+    }
+
+    function bindNeighborhood(feature, leafletLayer) {
+      const properties = feature.properties || {};
+      leafletLayer.on({
+        click: () => selectNeighborhood(properties),
+        mouseover: () => leafletLayer.setStyle({ weight: 2.5, fillOpacity: 0.72 }),
+        mouseout: () => leafletLayer.setStyle(neighborhoodStyle(feature))
+      });
+      leafletLayer.bindTooltip(
+        `${escapeHTML(properties.name)} (${format.format(properties.treeCount || 0)} trees)`,
+        { sticky: true, direction: "top" }
+      );
+    }
+
+    function neighborhoodStyle(feature) {
+      const properties = feature.properties || {};
+      const selected = state.selectedNeighborhood && state.selectedNeighborhood.slug === properties.slug;
+      return {
+        color: selected ? "#8f321f" : "#466056",
+        weight: selected ? 2.8 : 1,
+        opacity: selected ? 0.95 : 0.7,
+        fillColor: selected ? "#c65135" : neighborhoodColor(properties.treeCount || 0),
+        fillOpacity: selected ? 0.72 : 0.58
+      };
+    }
+
+    function neighborhoodColor(count) {
+      if (count >= 8000) return "#1f6f54";
+      if (count >= 6000) return "#4f9a62";
+      if (count >= 4000) return "#9fbd5b";
+      if (count >= 2000) return "#d5b64b";
+      return "#e9e2b7";
+    }
+
+    function updateNeighborhoodStyles() {
+      if (!neighborhoodLayer) return;
+      neighborhoodLayer.eachLayer(item => {
+        item.setStyle(neighborhoodStyle(item.feature));
+      });
+    }
+
+    function boundsForNeighborhood(slug) {
+      if (!neighborhoodLayer) return null;
+      let bounds = null;
+      neighborhoodLayer.eachLayer(item => {
+        if (item.feature && item.feature.properties && item.feature.properties.slug === slug) {
+          bounds = item.getBounds();
+        }
+      });
+      return bounds;
+    }
+
+    function selectNeighborhoodAtEvent(event) {
+      const latlng = map.containerPointToLatLng([event.offsetX, event.offsetY]);
+      const feature = neighborhoodFeatureAtLatLng(latlng);
+      if (feature) selectNeighborhood(feature.properties);
+    }
+
+    function neighborhoodFeatureAtLatLng(latlng) {
+      return state.neighborhoodFeatures.find(feature => {
+        const properties = feature.properties || {};
+        if (state.selectedNeighborhood && properties.slug === state.selectedNeighborhood.slug) return false;
+        return pointInGeometry(latlng.lat, latlng.lng, feature.geometry);
+      });
+    }
+
+    function pointInGeometry(lat, lng, geometry) {
+      if (!geometry) return false;
+      if (geometry.type === "Polygon") return pointInPolygon(lat, lng, geometry.coordinates);
+      if (geometry.type === "MultiPolygon") return geometry.coordinates.some(polygon => pointInPolygon(lat, lng, polygon));
+      return false;
+    }
+
+    function pointInPolygon(lat, lng, polygon) {
+      if (!polygon || !polygon.length || !pointInRing(lat, lng, polygon[0])) return false;
+      return !polygon.slice(1).some(ring => pointInRing(lat, lng, ring));
+    }
+
+    function pointInRing(lat, lng, ring) {
+      let inside = false;
+      let j = ring.length - 1;
+      for (let i = 0; i < ring.length; i += 1) {
+        const xi = ring[i][0];
+        const yi = ring[i][1];
+        const xj = ring[j][0];
+        const yj = ring[j][1];
+        const intersects = (yi > lat) !== (yj > lat);
+        if (intersects) {
+          const xAtLat = ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+          if (lng < xAtLat) inside = !inside;
+        }
+        j = i;
+      }
+      return inside;
+    }
+
+    function renderNeighborhoodLegend() {
+      const items = [
+        { name: "8,000+ trees", color: "#1f6f54" },
+        { name: "6,000-7,999", color: "#4f9a62" },
+        { name: "4,000-5,999", color: "#9fbd5b" },
+        { name: "2,000-3,999", color: "#d5b64b" },
+        { name: "Under 2,000", color: "#e9e2b7" }
+      ];
+      els.legend.innerHTML = items.map(item => `
+        <div class="legend-item">
+          <span class="swatch" style="background:${item.color}"></span>
+          <span>${item.name}</span>
+          <span></span>
+        </div>
+      `).join("");
+    }
+
+    function renderNeighborhoodList() {
+      const neighborhoods = (state.summary && state.summary.neighborhoods ? state.summary.neighborhoods : [])
+        .slice()
+        .sort((a, b) => b.treeCount - a.treeCount)
+        .slice(0, 10);
+
+      els.topListLabel.textContent = "Neighborhoods";
+      els.topSpecies.innerHTML = neighborhoods.map(item => `
+        <div class="top-item">
+          <span class="swatch" style="background:${neighborhoodColor(item.treeCount)}"></span>
+          <button type="button" title="${escapeHTML(item.name)}" data-slug="${escapeHTML(item.slug)}">${escapeHTML(item.name)}</button>
+          <span class="count">${format.format(item.treeCount)}</span>
+        </div>
+      `).join("");
+
+      els.topSpecies.querySelectorAll("button").forEach(button => {
+        button.addEventListener("click", () => {
+          const neighborhood = (state.summary.neighborhoods || []).find(item => item.slug === button.dataset.slug);
+          if (neighborhood) selectNeighborhood(neighborhood);
+        });
+      });
+    }
+
+    function renderSelectedNeighborhood() {
+      els.topListLabel.textContent = "Most Common Species";
+      els.topSpecies.innerHTML = "";
     }
 
     function splitSpecies(value) {
@@ -832,24 +1061,7 @@
     }
 
     async function loadDetails() {
-      if (state.details) return state.details;
-      if (!state.detailsPromise) {
-        state.detailsPromise = fetch(DETAILS_PATH)
-          .then(response => {
-            if (!response.ok) throw new Error(`Could not load ${DETAILS_PATH}`);
-            return response.json();
-          })
-          .then(payload => {
-            state.details = payload;
-            return payload;
-          })
-          .catch(error => {
-            console.warn("Tree details could not be loaded.", error);
-            state.detailsPromise = null;
-            return null;
-          });
-      }
-      return state.detailsPromise;
+      return state.details;
     }
 
     function renderLegend() {
@@ -892,7 +1104,7 @@
         button.addEventListener("click", () => {
           els.search.value = button.dataset.species;
           state.search = button.dataset.species.toLowerCase();
-          layer.redraw();
+          redrawTrees();
         });
       });
     }
@@ -923,25 +1135,26 @@
       };
     }
 
-    const redrawDebounced = debounce(() => layer.redraw(), 80);
+    const redrawDebounced = debounce(redrawTrees, 80);
 
     els.search.addEventListener("input", () => {
       state.search = els.search.value.trim().toLowerCase();
-      if (state.search.length >= 3 && !state.details) {
-        loadDetails().then(() => layer.redraw());
-      }
       redrawDebounced();
     });
 
     els.colorMode.addEventListener("change", () => {
       state.colorMode = els.colorMode.value;
-      renderLegend();
-      layer.redraw();
+      if (state.data) {
+        renderLegend();
+      } else {
+        renderNeighborhoodLegend();
+      }
+      redrawTrees();
     });
 
     els.sizeMode.addEventListener("change", () => {
       state.sizeMode = els.sizeMode.value;
-      layer.redraw();
+      redrawTrees();
     });
 
     els.dbhMin.addEventListener("input", () => {
@@ -957,7 +1170,18 @@
     });
 
     els.resetView.addEventListener("click", () => {
-      map.fitBounds(SF_BOUNDS);
+      if (state.selectedNeighborhood) {
+        const bounds = boundsForNeighborhood(state.selectedNeighborhood.slug);
+        if (bounds) {
+          map.fitBounds(bounds, { padding: [26, 26] });
+          return;
+        }
+      }
+      if (neighborhoodLayer) {
+        map.fitBounds(neighborhoodLayer.getBounds(), { padding: [14, 14] });
+      } else {
+        map.fitBounds(SF_BOUNDS);
+      }
     });
 
     els.clearFilters.addEventListener("click", () => {
@@ -966,12 +1190,11 @@
       els.dbhValue.value = "0";
       state.search = "";
       state.dbhMin = 0;
-      layer.redraw();
+      redrawTrees();
     });
 
-    layer = new TreeCanvasLayer().addTo(map);
     map.fitBounds(SF_BOUNDS);
-    loadTrees();
+    loadNeighborhoods();
   </script>
 </body>
 </html>

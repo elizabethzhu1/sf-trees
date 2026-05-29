@@ -1,0 +1,187 @@
+{
+  "id" : "p5b7-5n3h",
+  "name" : "Analysis Neighborhoods",
+  "assetType" : "map",
+  "averageRating" : 0,
+  "category" : "",
+  "createdAt" : 1697567500,
+  "description" : "<b><i>***As of November 2023, this map has been updated to use a new format. For details, please see <a href=\"https://data.sfgov.org/stories/s/q44z-zyx4\">here</a>.***</i></b> </br> A. SUMMARY\nThe Department of Public Health and the Mayorâ€™s Office of Housing and Community Development, with support from the Planning Department, created these 41 neighborhoods by grouping 2010 Census tracts, using common real estate and residentsâ€™ definitions for the purpose of providing consistency in the analysis and reporting of socio-economic, demographic, and environmental data, and data on City-funded programs and services. These neighborhoods are not codified in Planning Code nor Administrative Code, although this map is referenced in Planning Code Section 415 as the â€œAmerican Community Survey Neighborhood Profile Boundaries Map.\nNote: These are NOT statistical boundaries as they are not controlled for population size. This is also NOT an official map of neighborhood boundaries in SF but an aggregation of Census tracts and should be used in conjunction with other spatial boundaries for decision making.\nB. HOW THE DATASET IS CREATED\nThis dataset is produced by assigning Census tracts to neighborhoods based on existing neighborhood definitions used by Planning and MOHCD. A qualitative assessment is made to identify the appropriate neighborhood for a given tract based on understanding of population distribution and significant landmarks. Once all tracts have been assigned a neighborhood, the tracts are dissolved to produce this dataset, Analysis Neighborhoods.\nC. UPDATE PROCESS\nThis dataset is static. Changes to the analysis neighborhood boundaries will be evaluated as needed by the Analysis Neighborhood working group led by DataSF and the Planning department and includes staff from various other city departments. Contact us\nfor any questions.\nD. HOW TO USE THIS DATASET\nDownloading this dataset and opening it in Excel may cause some of the data values to be lost or not display properly (particularly the Analysis Neighborhood column). For a simple list of Analysis Neighborhoods without geographic coordinates, click here: https://data.sfgov.org/resource/xfcw-9evu.csv?$select=nhood\nE. RELATED DATASETS\n2020 Census tracts assigned a neighborhood\n2010 Census tracts assigned a neighborhood",
+  "diciBackend" : false,
+  "displayType" : "visualization_canvas_map",
+  "domainCName" : "data.sfgov.org",
+  "downloadCount" : 15850,
+  "hideFromCatalog" : false,
+  "hideFromDataJson" : false,
+  "licenseId" : "PDDL",
+  "locked" : false,
+  "modifyingViewUid" : "j2bu-swwd",
+  "newBackend" : true,
+  "numberOfComments" : 0,
+  "oid" : 40127727,
+  "provenance" : "official",
+  "publicationAppendEnabled" : false,
+  "publicationDate" : 1698856225,
+  "publicationGroup" : 19330626,
+  "publicationStage" : "published",
+  "rowsUpdatedAt" : 1697567411,
+  "tableId" : 19330626,
+  "totalTimesRated" : 0,
+  "viewCount" : 57639,
+  "viewLastModified" : 1710355818,
+  "viewType" : "tabular",
+  "approvals" : [ {
+    "reviewedAt" : 1704993828,
+    "reviewedAutomatically" : false,
+    "state" : "approved",
+    "submissionId" : 6071506,
+    "submissionObject" : "public_audience_request",
+    "submissionOutcome" : "change_audience",
+    "submittedAt" : 1704993792,
+    "targetAudience" : "public",
+    "workflowId" : 2546,
+    "reviewer" : {
+      "id" : "biii-acfk",
+      "displayName" : "Artem Pugachev"
+    },
+    "submissionDetails" : {
+      "permissionType" : "READ"
+    },
+    "submissionOutcomeApplication" : {
+      "endedAt" : 1704993828,
+      "failureCount" : 0,
+      "startedAt" : 1704993828,
+      "status" : "success"
+    },
+    "submitter" : {
+      "id" : "biii-acfk",
+      "displayName" : "Artem Pugachev"
+    }
+  }, {
+    "message" : "The `strict_permissions` flag must be on to enable internal approvals.",
+    "state" : "unsubmittable",
+    "targetAudience" : "internal",
+    "workflowId" : 5264
+  } ],
+  "clientContext" : {
+    "clientContextVariables" : [ ],
+    "inheritedVariables" : { }
+  },
+  "columns" : [ ],
+  "displayFormat" : {
+    "visualizationCanvasMetadata" : {
+      "vifs" : [ {
+        "configuration" : {
+          "viewSourceDataLink" : true,
+          "mapCenterAndZoom" : {
+            "center" : {
+              "lng" : -122.44245688017713,
+              "lat" : 37.76179471162882
+            },
+            "zoom" : 11.581334358938244
+          },
+          "showLegendForMap" : false,
+          "showDataTableControl" : false,
+          "basemapOptions" : {
+            "searchBoundaryLowerRightLongitude" : -122.35696687665975,
+            "searchBoundaryUpperLeftLongitude" : -122.51494757950903,
+            "searchBoundaryUpperLeftLatitude" : 37.833297639488315,
+            "navigationControl" : true,
+            "basemapStyle" : "mapbox://styles/mapbox/streets-v9",
+            "geoCoderControl" : false,
+            "geoLocateControl" : false,
+            "searchBoundaryLowerRightLatitude" : 37.70813199967893
+          },
+          "mapPitchAndBearing" : {
+            "bearing" : 0,
+            "pitch" : 0
+          },
+          "datasetMetadata" : false,
+          "panAndZoom" : true,
+          "showMultiplePointsSymbolInLegend" : true,
+          "locateUser" : false
+        },
+        "series" : [ {
+          "visible" : true,
+          "color" : {
+            "primary" : "#eb6900"
+          },
+          "mapOptions" : {
+            "shapeOutlineColor" : "#636363",
+            "simplificationLevel" : "1",
+            "shapeFillOpacity" : 53,
+            "mapType" : "boundaryMap",
+            "shapeFillColor" : "#969696",
+            "shapeOutlineWidth" : 1,
+            "additionalFlyoutColumns" : [ "nhood" ]
+          },
+          "showLegend" : true,
+          "type" : "map",
+          "dataSource" : {
+            "measure" : {
+              "aggregationFunction" : "count"
+            },
+            "name" : "Analysis Neighborhoods",
+            "type" : "socrata.soql",
+            "datasetUid" : "j2bu-swwd",
+            "dimension" : {
+              "columnName" : "the_geom"
+            }
+          },
+          "primary" : true
+        } ],
+        "format" : {
+          "type" : "visualization_interchange_format",
+          "version" : 4
+        },
+        "description" : "A. SUMMARY\nThe Department of Public Health and the Mayor’s Office of Housing and Community Development, with support from the Planning Department, created these 41 neighborhoods by grouping 2010 Census tracts, using common real estate and residents’ definitions for the purpose of providing consistency in the analysis and reporting of socio-economic, demographic, and environmental data, and data on City-funded programs and services. These neighborhoods are not codified in Planning Code nor Administrative Code, although this map is referenced in Planning Code Section 415 as the “American Community Survey Neighborhood Profile Boundaries Map.\nNote: These are NOT statistical boundaries as they are not controlled for population size. This is also NOT an official map of neighborhood boundaries in SF but an aggregation of Census tracts and should be used in conjunction with other spatial boundaries for decision making.\nB. HOW THE DATASET IS CREATED\nThis dataset is produced by assigning Census tracts to neighborhoods based on existing neighborhood definitions used by Planning and MOHCD. A qualitative assessment is made to identify the appropriate neighborhood for a given tract based on understanding of population distribution and significant landmarks. Once all tracts have been assigned a neighborhood, the tracts are dissolved to produce this dataset, Analysis Neighborhoods.\nC. UPDATE PROCESS\nThis dataset is static. Changes to the analysis neighborhood boundaries will be evaluated as needed by the Analysis Neighborhood working group led by DataSF and the Planning department and includes staff from various other city departments. Contact us\nfor any questions.\nD. HOW TO USE THIS DATASET\nDownloading this dataset and opening it in Excel may cause some of the data values to be lost or not display properly (particularly the Analysis Neighborhood column). For a simple list of Analysis Neighborhoods without geographic coordinates, click here: https://data.sfgov.org/resource/xfcw-9evu.csv?$select=nhood\nE. RELATED DATASETS\n2020 Census tracts assigned a neighborhood\n2010 Census tracts assigned a neighborhood",
+        "id" : "7ccf29a2-1e4d-411b-a264-d4024f5ab02c",
+        "title" : "Analysis Neighborhoods",
+        "currentMapLayerIndex" : 0
+      } ],
+      "version" : 1
+    }
+  },
+  "grants" : [ {
+    "inherited" : false,
+    "type" : "viewer",
+    "flags" : [ "public" ]
+  } ],
+  "license" : {
+    "name" : "Open Data Commons Public Domain Dedication and License",
+    "termsLink" : "http://opendatacommons.org/licenses/pddl/1.0/"
+  },
+  "metadata" : {
+    "custom_fields" : {
+      "Department Metrics" : {
+        "Publishing Department" : "Planning"
+      },
+      "Internal Management" : {
+        "Inventory ID" : ""
+      },
+      "Publishing Details" : {
+        "Data change frequency" : "As needed",
+        "Program link" : "",
+        "Publishing frequency" : "As needed",
+        "Geographic unit" : ""
+      }
+    },
+    "availableDisplayTypes" : [ "visualization" ]
+  },
+  "owner" : {
+    "id" : "dbag-6qd9",
+    "displayName" : "OpenData",
+    "screenName" : "OpenData",
+    "type" : "interactive",
+    "flags" : [ "acceptedEula" ]
+  },
+  "query" : { },
+  "rights" : [ "read" ],
+  "tableAuthor" : {
+    "id" : "dbag-6qd9",
+    "displayName" : "OpenData",
+    "screenName" : "OpenData",
+    "type" : "interactive",
+    "flags" : [ "acceptedEula" ]
+  },
+  "flags" : [ "federated", "internalToPublicFederatedView", "ownerMayBeContacted", "restorable", "restorePossibleForType" ]
+}
